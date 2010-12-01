@@ -1,0 +1,10 @@
+This is a simple .NET command line application that will convert a VDPROJ file into an XML structure.
+That structure can then easily be manipulated and/or modified. For example, changing the installer
+version number, product name, icon, etc. Then XML structure can then, just as easily, be converted
+back to a VDPROJ file. This is a bit easier than using regular expressions to parse the VDPROJ file.
+
+The resulting XML is a fairly direct representation of the VDPROJ file. Each node in the VDPROJ is
+converted to an XML element. Invalid element name characters are encoded according to
+System.Xml.XmlConvert.EncodeLocalName.
+
+The code is very simple. There is no license. You are free to use and abuse it as you see fit.
