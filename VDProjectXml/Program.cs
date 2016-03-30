@@ -6,19 +6,34 @@ using System.IO;
 using System.Xml;
 using System.Text.RegularExpressions;
 
-namespace VDProjectXml
+namespace VDProject2Xml
 {
 	class Program
 	{
-		/// <summary>
-		/// Matches "key" [= "8:value"] with support for backslash escapes.
-		/// </summary>
-		private static readonly Regex ElementRegex = new Regex(@"^""([^""\\]*(?:\\.[^""\\]*)*)""(?:\s*=\s*""(\d+):([^""\\]*(?:\\.[^""\\]*)*)"")?$", RegexOptions.Singleline);
+        /// <summary>
+        /// Matches <c>"key" [= "8:value"]</c> with support for backslash escapes.
+        /// </summary>
+        private static readonly Regex ElementRegex = new Regex(@"^""([^""\\]*(?:\\.[^""\\]*)*)""(?:\s*=\s*""(\d+):([^""\\]*(?:\\.[^""\\]*)*)"")?$", RegexOptions.Singleline);
 
-		private const string Indent = "    ";
+        /// <summary>
+        /// Mataches <c>"value:value"</c> for keyless entries like <c>"{EDC2488A-8267-493A-A98E-7D9C3B36CDF3}:.NETFramework,Version=v4.5.2"</c> 
+        /// or <c>"BootstrapperCfg:{63ACBE69-63AA-4F98-B2B6-99F9E24495F2}"</c>.
+        /// </summary>
+        private static readonly Regex NoKeyEntry = new Regex(@"^""([^""]*?):([^""]*)""$", RegexOptions.Singleline);
 
-		static void Main(string[] args)
+        private const string Indent = "    ";
+	    private const string NoKeyEntryName = "NoKeyEntry";
+	    private const string ValueTypeAttribute = "valueType";
+	    private const string ValueAttribute = "value";
+
+	    static int Main(string[] args)
 		{
+	        if (args.Length == 0 || args.Length > 3)
+	        {
+	            ShowHelp();
+	            return -1;
+	        }
+
 			string inputFile = args[0];
 			string outputFile = args.Length > 1 ? args[1] : null;
 
@@ -33,14 +48,43 @@ namespace VDProjectXml
 					break;
 
 				default:
-					throw new Exception("Unknown file type: " + inputFile);
+			        ShowHelp();
+			        return -2;
 			}
+
+	        return 0;
 		}
 
-		static void ConvertVDProjToXml(string vdrpojFile, string xmlFile)
-		{
+	    private static void ShowHelp()
+	    {
+	        Console.WriteLine("VDProject2Xml - A Visual Studio installer to XML converter.");
+            Console.WriteLine("Usage: VDProject2Xml installerProject.vdproj [installerProject.xml]");
+            Console.WriteLine("       VDProject2Xml installerProject.xml [installerProject.vdproj]");
+	        Console.WriteLine("If no output file path is provided the program will use the input filename with the extension changed to .xml");
+            Console.WriteLine("Set the environment variable VDPROJECT2XML_INDENT to \"{0}\" to make the outputed XML use newlines and indenting.", Boolean.TrueString);
+	    }
+
+	    public static bool CheckIfShouldIndent()
+	    {
+	        var indentString = Environment.GetEnvironmentVariable("VDPROJECT2XML_INDENT");
+	        bool result;
+	        if (!Boolean.TryParse(indentString, out result))
+	        {
+	            result = false;
+	        }
+	        return result;
+	    }
+
+	    static void ConvertVDProjToXml(string vdrpojFile, string xmlFile)
+	    {
+            
+	        XmlWriterSettings settings = new XmlWriterSettings()
+	        {
+	            Indent = CheckIfShouldIndent()
+            };
+
 			using (StreamReader reader = File.OpenText(vdrpojFile))
-			using (XmlWriter writer = XmlWriter.Create(xmlFile))
+			using (XmlWriter writer = XmlWriter.Create(xmlFile, settings))
 			{
 				string line;
 				bool prevLineElement = false;
@@ -52,23 +96,33 @@ namespace VDProjectXml
 
 					Match match = ElementRegex.Match(line);
 
-					if (match.Success)
+                    if (match.Success)
 					{
 						if (prevLineElement)
 							writer.WriteEndElement();
 
-						string elementName = Unescape(match.Groups[1].Value);
-						string fixedElementName = XmlConvert.EncodeLocalName(elementName);
+                        Match noKeyMatch = NoKeyEntry.Match(line);
+					    if (noKeyMatch.Success)
+					    {
+                            writer.WriteStartElement(NoKeyEntryName);
+                            writer.WriteAttributeString(ValueTypeAttribute, Unescape(noKeyMatch.Groups[1].Value));
+                            writer.WriteAttributeString(ValueAttribute, Unescape(noKeyMatch.Groups[2].Value));
+					    }
+					    else
+					    {
+					        string elementName = Unescape(match.Groups[1].Value);
+					        string fixedElementName = XmlConvert.EncodeLocalName(elementName);
 
-						writer.WriteStartElement(fixedElementName);
+					        writer.WriteStartElement(fixedElementName);
 
-						if (match.Groups[2].Success)
-						{
-							writer.WriteAttributeString("valueType", match.Groups[2].Value);
-							writer.WriteAttributeString("value", Unescape(match.Groups[3].Value));
-						}
+					        if (match.Groups[2].Success)
+					        {
+					            writer.WriteAttributeString(ValueTypeAttribute, match.Groups[2].Value);
+					            writer.WriteAttributeString(ValueAttribute, Unescape(match.Groups[3].Value));
+					        }
+					    }
 
-						prevLineElement = true;
+					    prevLineElement = true;
 					}
 					else
 					{
@@ -91,7 +145,7 @@ namespace VDProjectXml
 			}
 		}
 
-		static void ConvertXmlVDProj(string vdrpojFile, string xmlFile)
+		static void ConvertXmlVDProj(string xmlFile, string vdrpojFile)
 		{
 			int indentLevel = -1;
 
@@ -125,17 +179,26 @@ namespace VDProjectXml
 		}
 
 		private static void WriteElement(XmlReader reader, TextWriter writer)
-		{
-			string elementName = Escape(XmlConvert.DecodeName(reader.LocalName));
+        {
+            string valueType = reader.GetAttribute(ValueTypeAttribute);
+            string value = reader.GetAttribute(ValueAttribute);
 
-			writer.Write("\"{0}\"", elementName);
+            if (reader.LocalName == NoKeyEntryName)
+		    {
+		        writer.Write("\"{0}:{1}\"", Escape(valueType), Escape(value));
+		    }
+		    else
+		    {
+                string elementName = Escape(XmlConvert.DecodeName(reader.LocalName));
 
-			string value = reader.GetAttribute("value");
+                writer.Write("\"{0}\"", elementName);
 
-			if (value != null)
-			{
-				writer.Write(" = \"{0}:{1}\"", reader.GetAttribute("valueType"), Escape(value));
-			}
+                if (value != null)
+                {
+                    writer.Write(" = \"{0}:{1}\"", valueType, Escape(value));
+                }
+            }
+			
 
 			writer.WriteLine();
 		}
